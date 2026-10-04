@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Misión a la Luna</title>
+<link rel="icon" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon.png">
+<script src="/socket.io/socket.io.js"></script>
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:#050814;color:#fff;font-family:system-ui,sans-serif;overflow:hidden;touch-action:none}
+canvas#c{display:block;width:100%;height:100%}
+.ov{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(5,8,20,.82);text-align:center;padding:16px}
+.hide{display:none!important}
+button{background:#2b6cff;color:#fff;border:0;border-radius:10px;padding:11px 16px;font-size:16px;cursor:pointer}
+button.o{background:#ff9d2b}button.g{background:#3a4258}button:disabled{opacity:.4}
+input{padding:10px;border-radius:8px;border:0;width:130px;font-size:15px}
+.row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center}
+#hud{position:fixed;left:0;right:0;top:0;padding:calc(8px + env(safe-area-inset-top,0px)) 12px 8px;display:flex;gap:14px;font-size:15px;background:rgba(0,0,0,.4);pointer-events:none}
+#board{position:fixed;right:8px;top:calc(46px + env(safe-area-inset-top,0px));background:rgba(0,0,0,.5);padding:6px 9px;border-radius:8px;font-size:12px;pointer-events:none}
+#bar{position:fixed;left:12px;top:calc(46px + env(safe-area-inset-top,0px));width:10px;height:40vh;background:#222;border-radius:5px;pointer-events:none}
+#fill{position:absolute;bottom:0;width:100%;background:#ffb02e;border-radius:5px}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="hud" class="hide"><span id="hc">🪙 0</span><span id="hs">🛡️ 3</span><span id="ht"></span></div>
+<div id="bar" class="hide"><div id="fill"></div></div>
+<div id="board" class="hide"></div>
+
+<div id="menu" class="ov">
+ <h1 style="margin:0">🚀 Misión a la Luna</h1>
+ <canvas id="mp" width="120" height="200"></canvas>
+ <div id="mcoins" style="font-size:18px"></div>
+ <div class="row"><input id="name" placeholder="Tu nombre" maxlength="14">
+ <button id="x1" class="o">x1 · 3:00</button><button id="x2" class="g">x2 · 1:30</button></div>
+ <div class="row"><button id="play">🚀 Despegar</button><button id="shopb" class="g">🛒 Cohetes</button></div>
+ <small>Mueve el cohete: flechas / A-D / W-S, o arrastra con el dedo. Esquiva rocas y junta monedas.</small>
+</div>
+
+<div id="shop" class="ov hide">
+ <h2 style="margin:0">Tienda · 999 cohetes</h2>
+ <div id="scoins"></div>
+ <canvas id="sp" width="140" height="230"></canvas>
+ <div id="sname" style="font-size:18px"></div><div id="sstats" style="font-size:14px"></div>
+ <div class="row"><button class="g" id="m10">-10</button><button class="g" id="m1">◀</button>
+ <input id="jump" type="number" min="1" max="999" style="width:80px"><button class="g" id="p1">▶</button><button class="g" id="p10">+10</button></div>
+ <div class="row"><button id="buy"></button><button class="g" id="back">Volver</button></div>
+</div>
+
+<div id="end" class="ov hide"><h1 id="et" style="margin:0"></h1><div id="ed"></div>
+ <button id="again">Volver al menú</button></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const cv=$('c'),ctx=cv.getContext('2d');let W,H;
+function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight}rs();onresize=rs;
+const socket=(typeof io!=='undefined')?io():null;
+
+// ---- Guardado ----
+let save={coins:0,owned:{1:1},sel:1};
+try{const s=JSON.parse(localStorage.getItem('luna2'));if(s&&s.owned)save=s}catch(e){}
+const persist=()=>{try{localStorage.setItem('luna2',JSON.stringify(save))}catch(e){}};
+
+// ---- 999 cohetes generados ----
+const A=['Nova','Titan','Orion','Atlas','Cometa','Vega','Falcón','Rayo','Zenit','Aurora','Pegaso','Hércules','Saturno','Fénix','Júpiter','Delta','Sirio','Cóndor','Apolo','Quasar'];
+const B=['Alfa','Beta','Max','Pro','Turbo','Ultra','Prime','X','Jr','Plus'];
+function rk(i){
+ if(i===1)return{i,name:'Artemis II SLS',price:0,core:'#e8762d',boost:'#f4f4f4',nb:2,nose:0,fins:0,flame:30,speed:300,shield:3,art:1};
+ const h=(i*47)%360;
+ return{i,name:A[i%20]+' '+B[(i*7)%10]+' #'+i,price:(i-1)*3,core:`hsl(${h},70%,55%)`,boost:`hsl(${(h+180)%360},60%,85%)`,
+  nb:i%3===0?0:(i%5===0?4:2),nose:i%3,fins:i%4,flame:(i*29)%360,speed:280+(i%10)*28+Math.floor(i/50)*6,shield:3+(i%5===0?1:0)+Math.floor(i/250)};
+}
+function drawRocket(g,r,x,y,s,fl){
+ g.save();g.translate(x,y);g.scale(s,s);
+ if(fl){g.fillStyle=`hsl(${r.flame},100%,60%)`;g.beginPath();g.moveTo(-9,32);g.lineTo(0,58+Math.random()*22);g.lineTo(9,32);g.fill();
+  if(r.nb){g.beginPath();[-20,20].forEach(b=>{g.moveTo(b-5,32);g.lineTo(b,48+Math.random()*14);g.lineTo(b+5,32)});g.fill()}}
+ // boosters
+ if(r.nb){g.fillStyle=r.boost;[-20,20].forEach(b=>{g.beginPath();g.roundRect(b-6,-18,12,50,4);g.fill();
+  g.fillStyle=r.art?'#222':r.core;g.beginPath();g.moveTo(b-6,-18);g.quadraticCurveTo(b,-34,b+6,-18);g.fill();g.fillStyle=r.boost});
+  if(r.nb===4){g.fillStyle=r.boost;[-30,30].forEach(b=>{g.beginPath();g.roundRect(b-4,-4,8,34,3);g.fill()})}}
+ // fins
+ g.fillStyle=r.art?'#ddd':r.boost;
+ if(r.fins===1){g.beginPath();g.moveTo(-10,10);g.lineTo(-24,34);g.lineTo(-10,30);g.fill();g.beginPath();g.moveTo(10,10);g.lineTo(24,34);g.lineTo(10,30);g.fill()}
+ if(r.fins===2){g.fillRect(-16,24,32,6)}
+ if(r.fins===3){g.beginPath();g.moveTo(-10,18);g.lineTo(-18,34);g.lineTo(-10,34);g.fill();g.beginPath();g.moveTo(10,18);g.lineTo(18,34);g.lineTo(10,34);g.fill()}
+ // core
+ g.fillStyle=r.core;g.beginPath();g.roundRect(-11,-26,22,58,5);g.fill();
+ g.fillStyle=r.art?'#f4f4f4':r.boost;g.beginPath();
+ if(r.nose===0){g.moveTo(-9,-26);g.quadraticCurveTo(0,-52,9,-26)}else if(r.nose===1){g.arc(0,-26,9,Math.PI,0)}else{g.moveTo(-9,-26);g.lineTo(-5,-38);g.lineTo(5,-38);g.lineTo(9,-26)}
+ g.fill();
+ g.fillStyle='#5ac8fa';g.beginPath();g.arc(0,-8,5,0,7);g.fill();
+ g.restore();
+}
+function prev(c,r,s){const g=c.getContext('2d');g.fillStyle='#0a1030';g.fillRect(0,0,c.width,c.height);drawRocket(g,r,c.width/2,c.height/2+10,s,1)}
+
+// ---- Menú / tienda ----
+let speedSel=1,shopI=save.sel;
+const refreshMenu=()=>{$('mcoins').textContent='🪙 '+save.coins+' · '+rk(save.sel).name;prev($('mp'),rk(save.sel),1.6)};
+$('x1').onclick=()=>{speedSel=1;$('x1').className='o';$('x2').className='g'};
+$('x2').onclick=()=>{speedSel=2;$('x2').className='o';$('x1').className='g'};
+$('shopb').onclick=()=>{shopI=save.sel;$('menu').classList.add('hide');$('shop').classList.remove('hide');drawShop()};
+$('back').onclick=()=>{$('shop').classList.add('hide');$('menu').classList.remove('hide');refreshMenu()};
+const go=n=>{shopI=Math.max(1,Math.min(999,n));drawShop()};
+$('m10').onclick=()=>go(shopI-10);$('m1').onclick=()=>go(shopI-1);$('p1').onclick=()=>go(shopI+1);$('p10').onclick=()=>go(shopI+10);
+$('jump').onchange=()=>go(+$('jump').value||1);
+function drawShop(){const r=rk(shopI);prev($('sp'),r,2);$('jump').value=shopI;
+ $('scoins').textContent='🪙 '+save.coins;$('sname').textContent=r.name;
+ $('sstats').textContent='Maniobra '+Math.round(r.speed)+' · Escudos '+r.shield;
+ const b=$('buy'),own=save.owned[shopI];
+ if(save.sel===shopI){b.textContent='✔ En uso';b.disabled=true}
+ else if(own){b.textContent='Usar';b.disabled=false}
+ else{b.textContent='Comprar 🪙 '+r.price;b.disabled=save.coins<r.price}}
+$('buy').onclick=()=>{const r=rk(shopI);
+ if(!save.owned[shopI]){if(save.coins<r.price)return;save.coins-=r.price;save.owned[shopI]=1}
+ save.sel=shopI;persist();drawShop()};
+
+// ---- Juego ----
+const T=180,keys={};let G=null,others=[],lastSend=0;
+addEventListener('keydown',e=>keys[e.key.toLowerCase()]=1);addEventListener('keyup',e=>keys[e.key.toLowerCase()]=0);
+let touch=null;cv.addEventListener('pointerdown',e=>touch={x:e.clientX,y:e.clientY});
+cv.addEventListener('pointermove',e=>{if(touch&&G){G.x+=e.clientX-touch.x;G.y+=e.clientY-touch.y;touch={x:e.clientX,y:e.clientY}}});
+addEventListener('pointerup',()=>touch=null);
+$('play').onclick=()=>{const r=rk(save.sel);
+ G={r,sp:speedSel,prog:0,x:W/2,y:H*.75,shield:r.shield,inv:0,coins:0,obs:[],cns:[],t:0,spawn:0,over:0,stars:G&&G.stars||Array.from({length:90},()=>({x:Math.random(),y:Math.random(),s:Math.random()*2+.5}))};
+ if(!G.stars)G.stars=[];
+ ['menu','end'].forEach(i=>$(i).classList.add('hide'));['hud','bar','board'].forEach(i=>$(i).classList.remove('hide'))};
+function finish(win){G.over=win?1:2;const bonus=win?(G.sp===2?300:200):0;save.coins+=G.coins+bonus;persist();
+ ['hud','bar'].forEach(i=>$(i).classList.add('hide'));
+ $('et').textContent=win?'🌕 ¡Llegaste a la Luna!':'💥 Tu cohete se destruyó';
+ $('ed').textContent='Monedas: +'+G.coins+(win?'  ·  Bonus: +'+bonus:'')+'  ·  Total 🪙 '+save.coins;
+ $('end').classList.remove('hide');refreshMenu()}
+$('again').onclick=()=>{$('end').classList.add('hide');$('menu').classList.remove('hide');G=null;refreshMenu()};
+
+if(socket)socket.on('state',l=>others=l.filter(p=>p.id!==socket.id));
+function send(){if(!socket)return;socket.emit('update',{name:$('name').value||'Piloto',state:G?(G.over?'done':'flying'):'menu',progress:G?G.prog:0,rocket:save.sel,speed:G?G.sp:1})}
+
+let last=performance.now();
+function loop(now){const dt=Math.min(.05,(now-last)/1000);last=now;
+ ctx.fillStyle='#050814';ctx.fillRect(0,0,W,H);
+ const play=G&&!G.over,sp=G?G.sp:1;
+ const st=G?G.stars:(loop.s=loop.s||Array.from({length:90},()=>({x:Math.random(),y:Math.random(),s:Math.random()*2+.5})));
+ st.forEach(s=>{s.y=(s.y+dt*(play?.3*sp*s.s:.02))%1;ctx.fillStyle='rgba(255,255,255,.8)';ctx.fillRect(s.x*W,s.y*H,s.s,s.s)});
+ if(G){
+  if(play){
+   G.t+=dt;G.prog=Math.min(1,G.prog+dt*G.sp/T);G.inv=Math.max(0,G.inv-dt);
+   const v=G.r.speed,k=keys;
+   if(k.arrowleft||k.a)G.x-=v*dt;if(k.arrowright||k.d)G.x+=v*dt;if(k.arrowup||k.w)G.y-=v*dt*.7;if(k.arrowdown||k.s)G.y+=v*dt*.7;
+   G.x=Math.max(30,Math.min(W-30,G.x));G.y=Math.max(H*.35,Math.min(H-60,G.y));
+   G.spawn-=dt;
+   if(G.spawn<=0&&G.prog<.97){G.spawn=Math.max(.25,(.85-G.prog*.4)/G.sp);
+    G.obs.push({x:Math.random()*W,y:-40,r:14+Math.random()*20,vy:(160+G.prog*140)*G.sp*(.8+Math.random()*.5),k:Math.random()<.2?1:0,a:0});
+    if(Math.random()<.7)G.cns.push({x:30+Math.random()*(W-60),y:-20,vy:140*G.sp})}
+   G.obs.forEach(o=>{o.y+=o.vy*dt;o.a+=dt;if(!G.inv&&Math.hypot(o.x-G.x,o.y-G.y)<o.r+16){o.y=H+99;G.shield--;G.inv=1.5;if(G.shield<=0)finish(false)}});
+   G.cns.forEach(c=>{c.y+=c.vy*dt;if(Math.hypot(c.x-G.x,c.y-G.y)<28){c.y=H+99;G.coins++}});
+   G.obs=G.obs.filter(o=>o.y<H+60);G.cns=G.cns.filter(c=>c.y<H+40);
+   if(G.prog>=1&&!G.over)finish(true);
+   $('hc').textContent='🪙 '+G.coins;$('hs').textContent='🛡️ '+G.shield;
+   $('ht').textContent='⏱ '+fmt((1-G.prog)*T/G.sp)+' · x'+G.sp;$('fill').style.height=G.prog*100+'%';
+  }
+  const pr=G.prog,my=-260+pr*H*.5,mr=40+pr*140;
+  ctx.fillStyle='#2a6bd6';ctx.beginPath();ctx.arc(W/2,H+140+pr*400,280,0,7);ctx.fill();
+  ctx.fillStyle='#d8d8d8';ctx.beginPath();ctx.arc(W/2,my,mr,0,7);ctx.fill();
+  ctx.fillStyle='#aaa';[[-.3,-.2,.18],[.25,.1,.12],[-.05,.35,.1]].forEach(([a,b,c])=>{ctx.beginPath();ctx.arc(W/2+a*mr,my+b*mr,c*mr,0,7);ctx.fill()});
+  G.cns.forEach(c=>{ctx.fillStyle='#ffd23f';ctx.beginPath();ctx.arc(c.x,c.y,10,0,7);ctx.fill();ctx.fillStyle='#b8860b';ctx.fillRect(c.x-2,c.y-5,4,10)});
+  G.obs.forEach(o=>{ctx.save();ctx.translate(o.x,o.y);ctx.rotate(o.a*1.5);
+   if(o.k){ctx.fillStyle='#889';ctx.fillRect(-o.r,-6,o.r*2,12);ctx.fillStyle='#3b6fd8';ctx.fillRect(-o.r*1.6,-10,o.r*.6,20);ctx.fillRect(o.r,-10,o.r*.6,20)}
+   else{ctx.fillStyle='#7a6a5a';ctx.beginPath();ctx.arc(0,0,o.r,0,7);ctx.fill();ctx.fillStyle='#5a4a3a';ctx.beginPath();ctx.arc(-o.r*.3,-o.r*.2,o.r*.3,0,7);ctx.fill()}ctx.restore()});
+  if(G.over!==2&&(!G.inv||Math.floor(G.t*12)%2)){
+   const y=G.over===1?my+mr+10:G.y;drawRocket(ctx,G.r,G.over===1?W/2:G.x,y,1,play)}
+  if(G.over===2){ctx.fillStyle='#ff7a1f';ctx.beginPath();ctx.arc(G.x,G.y,36,0,7);ctx.fill()}
+  if(now-lastSend>200){lastSend=now;send()}
+  const all=[{n:($('name').value||'Tú'),p:G.prog,me:1},...others.filter(o=>o.state==='flying').map(o=>({n:o.name,p:o.progress}))].sort((a,b)=>b.p-a.p);
+  $('board').innerHTML='<b>Pilotos</b><br>'+all.map(o=>(o.me?'➤ ':'')+o.n+' '+Math.floor(o.p*100)+'%').join('<br>');
+ }
+ requestAnimationFrame(loop)}
+const fmt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
+$('name').value=(()=>{try{return localStorage.getItem('luna_n')||''}catch(e){return ''}})();
+$('name').onchange=()=>{try{localStorage.setItem('luna_n',$('name').value)}catch(e){}};
+refreshMenu();requestAnimationFrame(loop);
+</script></body></html>
